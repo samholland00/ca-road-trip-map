@@ -39,6 +39,9 @@ const JPEG_QUALITY = 70;
 // though they have valid GPS. Keeps manual culls reproducible across rebuilds.
 const EXCLUDE = new Set(
   [
+    'IMG_0748.HEIC', // burst dupes, Dec 25 — removed on request (old stops 61-63)
+    'IMG_0749.HEIC',
+    'IMG_0750.HEIC',
     'IMG_0793.HEIC', // burst dupes, Joshua Tree, Dec 26 — removed on request
     'IMG_0794.HEIC',
     'IMG_0795.HEIC',
