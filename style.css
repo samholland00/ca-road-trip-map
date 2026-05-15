@@ -47,6 +47,12 @@ body {
   color: #5b6b7b;
 }
 
+/* The HTML `hidden` attribute must win over the #message display rule below
+   (an ID selector otherwise out-specifies the UA `[hidden]{display:none}`). */
+#message[hidden] {
+  display: none;
+}
+
 #message {
   position: absolute;
   inset: 0;

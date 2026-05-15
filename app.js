@@ -19,7 +19,9 @@ if (typeof L === "undefined") {
   throw new Error("Leaflet not loaded");
 }
 
-// Local (vendored) default-marker images — works offline and on Pages subpaths.
+// Local (vendored) default-marker images. Deleting _getIconUrl stops Leaflet
+// from auto-prepending its detected imagePath (which doubled the path -> 404s).
+delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: "vendor/leaflet/images/marker-icon-2x.png",
   iconUrl: "vendor/leaflet/images/marker-icon.png",
