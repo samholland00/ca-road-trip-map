@@ -74,10 +74,47 @@ body {
 
 .photo-popup img {
   display: block;
-  width: 260px;
-  max-width: 60vw;
+  width: 320px;
+  max-width: 78vw;
   height: auto;
   border-radius: 8px;
+}
+
+/* Photo-thumbnail markers */
+.thumb-marker {
+  width: 46px;
+  height: 46px;
+  border-radius: 8px;
+  border: 2px solid #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  background: #fff;
+  transition: transform 0.12s ease;
+}
+.thumb-marker:hover {
+  transform: scale(1.12);
+  z-index: 10000;
+}
+.thumb-marker img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* "Full trip" control button */
+.fulltrip-btn {
+  font: 600 0.82rem/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: var(--ink);
+  background: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.3);
+}
+.fulltrip-btn:hover {
+  background: #f0f3f6;
 }
 
 .photo-popup .caption {

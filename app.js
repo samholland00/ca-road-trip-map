@@ -64,6 +64,44 @@ function endpointMarker(lat, lng, kind, label) {
   }).bindTooltip(label, { direction: "top" });
 }
 
+// Each pin is a small photo thumbnail (so you can see what's where without
+// opening it). Clicking enlarges it in a popup.
+function photoMarker(photo, index, total) {
+  const marker = L.marker([photo.lat, photo.lng], {
+    icon: L.divIcon({
+      className: "",
+      html: `<div class="thumb-marker"><img loading="lazy" src="${photo.file}" alt=""></div>`,
+      iconSize: [46, 46],
+      iconAnchor: [23, 23],
+      popupAnchor: [0, -22],
+    }),
+  });
+  return marker.bindPopup(popupHtml(photo, index, total), {
+    maxWidth: 340,
+    minWidth: 240,
+  });
+}
+
+// A one-click "back to the whole trip" control — no repeated zooming out.
+function addFullTripControl(map, cluster, routeBounds) {
+  const Ctl = L.Control.extend({
+    onAdd() {
+      const b = L.DomUtil.create("button", "fulltrip-btn");
+      b.type = "button";
+      b.textContent = "⤢ Full trip";
+      b.title = "Zoom back out to the whole route";
+      L.DomEvent.disableClickPropagation(b);
+      L.DomEvent.on(b, "click", () => {
+        map.closePopup();
+        if (cluster.unspiderfy) cluster.unspiderfy();
+        map.flyToBounds(routeBounds.pad(0.12), { duration: 0.6 });
+      });
+      return b;
+    },
+  });
+  map.addControl(new Ctl({ position: "topright" }));
+}
+
 async function init() {
   const map = L.map("map", { scrollWheelZoom: true }).setView(
     [37.0, -119.5], // California, until we fit to the real route
@@ -101,28 +139,44 @@ async function init() {
 
   // Photos are already sorted chronologically by the build script.
   const latlngs = photos.map((p) => [p.lat, p.lng]);
+  const routeBounds = L.latLngBounds(latlngs);
+  const routeColor = getComputedStyle(document.documentElement)
+    .getPropertyValue("--route")
+    .trim();
 
   // Route line through every stop in order.
-  L.polyline(latlngs, {
-    color: getComputedStyle(document.documentElement)
-      .getPropertyValue("--route")
-      .trim(),
+  const route = L.polyline(latlngs, {
+    color: routeColor,
     weight: 4,
     opacity: 0.8,
   }).addTo(map);
 
-  // Clustered photo markers.
+  // Arrowheads along the route showing direction of travel.
+  L.polylineDecorator(route, {
+    patterns: [
+      {
+        offset: 30,
+        repeat: 90,
+        symbol: L.Symbol.arrowHead({
+          pixelSize: 11,
+          polygon: false,
+          pathOptions: { stroke: true, color: routeColor, weight: 3, opacity: 0.9 },
+        }),
+      },
+    ],
+  }).addTo(map);
+
+  // Clustered photo markers. zoomToBoundsOnClick is OFF so clicking a cluster
+  // fans its photos out in place (spiderfy) instead of forcing a deep zoom.
   const cluster = L.markerClusterGroup({
-    maxClusterRadius: 45,
+    maxClusterRadius: 100, // screen pixels (default 80); higher = more grouping
     showCoverageOnHover: false,
+    zoomToBoundsOnClick: false,
+    spiderfyOnMaxZoom: true,
+    spiderfyDistanceMultiplier: 2,
   });
   photos.forEach((photo, i) => {
-    L.marker([photo.lat, photo.lng])
-      .bindPopup(popupHtml(photo, i, photos.length), {
-        maxWidth: 300,
-        minWidth: 220,
-      })
-      .addTo(cluster);
+    photoMarker(photo, i, photos.length).addTo(cluster);
   });
   map.addLayer(cluster);
 
@@ -132,7 +186,16 @@ async function init() {
   endpointMarker(first.lat, first.lng, "start", "Trip start").addTo(map);
   endpointMarker(last.lat, last.lng, "end", "Trip end").addTo(map);
 
-  map.fitBounds(L.latLngBounds(latlngs).pad(0.12));
+  map.fitBounds(routeBounds.pad(0.12));
+  addFullTripControl(map, cluster, routeBounds);
+
+  // Esc collapses a fanned-out cluster / closes the open photo.
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      map.closePopup();
+      if (cluster.unspiderfy) cluster.unspiderfy();
+    }
+  });
 
   const startDay = new Date(first.timestamp).toLocaleDateString(undefined, {
     month: "short",
