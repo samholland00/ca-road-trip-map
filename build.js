@@ -22,13 +22,18 @@ import exifr from 'exifr';
 const execFileP = promisify(execFile);
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
-const SOURCE_DIR = path.join(ROOT, 'photos-source');
+// Source defaults to ./photos-source, but an optional CLI arg lets you point
+// the build at photos sitting anywhere (e.g. an export folder) without copying
+// gigabytes into the project:  node build.js "/path/to/exported photos"
+const SOURCE_DIR = process.argv[2]
+  ? path.resolve(process.argv[2])
+  : path.join(ROOT, 'photos-source');
 const PHOTOS_DIR = path.join(ROOT, 'photos');
 const DATA_FILE = path.join(ROOT, 'data', 'photos.json');
 
 const IMAGE_EXTS = new Set(['.heic', '.heif', '.jpg', '.jpeg', '.png', '.tif', '.tiff']);
-const MAX_EDGE_PX = 1600; // longest side of generated thumbnail
-const JPEG_QUALITY = 80;
+const MAX_EDGE_PX = 1280; // longest side of generated thumbnail (web-optimal)
+const JPEG_QUALITY = 70;
 
 /** Recursively collect image file paths under dir. */
 async function collectImages(dir) {
@@ -51,42 +56,93 @@ async function collectImages(dir) {
   return files;
 }
 
-/** Pull lat/lng + best-available timestamp from a file's EXIF. */
-async function readMeta(file) {
-  let exif = null;
+const toDate = (v) => {
+  if (!v) return null;
+  const d = v instanceof Date ? v : new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+/**
+ * Read lat/lng + capture time via macOS Spotlight metadata (`mdls`).
+ * This is far more reliable than JS EXIF parsers on iPhone HEIC files
+ * (exifr reports "Unknown file format" on many of them despite valid GPS).
+ */
+async function readMetaMdls(file) {
+  const { stdout } = await execFileP('mdls', [
+    '-name', 'kMDItemLatitude',
+    '-name', 'kMDItemLongitude',
+    '-name', 'kMDItemContentCreationDate',
+    file,
+  ]);
+  // Parse the self-describing "key = value" format. (Note: `mdls -raw` emits
+  // values in a fixed canonical order regardless of -name order, so we avoid
+  // positional parsing entirely.)
+  const get = (key) => {
+    const m = stdout.match(new RegExp(`^${key}\\s*=\\s*(.*)$`, 'm'));
+    if (!m) return null;
+    let v = m[1].trim();
+    if (v === '(null)') return null;
+    if (v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1);
+    return v;
+  };
+  const num = (key) => {
+    const v = get(key);
+    return v == null ? NaN : Number(v);
+  };
+  return {
+    lat: num('kMDItemLatitude'),
+    lng: num('kMDItemLongitude'),
+    when: toDate(get('kMDItemContentCreationDate')),
+  };
+}
+
+/** exifr fallback for the rare file mdls can't read. */
+async function readMetaExifr(file) {
   try {
-    exif = await exifr.parse(file, {
+    const x = await exifr.parse(file, {
       tiff: true,
       exif: true,
       gps: true,
       reviveValues: true,
     });
+    return {
+      lat: Number(x?.latitude),
+      lng: Number(x?.longitude),
+      when:
+        toDate(x?.DateTimeOriginal) ||
+        toDate(x?.CreateDate) ||
+        toDate(x?.ModifyDate),
+    };
   } catch {
-    exif = null;
+    return { lat: NaN, lng: NaN, when: null };
+  }
+}
+
+/** Pull lat/lng + best-available timestamp; mdls primary, exifr fallback. */
+async function readMeta(file) {
+  let m;
+  try {
+    m = await readMetaMdls(file);
+  } catch {
+    m = { lat: NaN, lng: NaN, when: null };
   }
 
-  const lat = exif && Number(exif.latitude);
-  const lng = exif && Number(exif.longitude);
+  const valid = (v) => Number.isFinite(v);
+  if (!valid(m.lat) || !valid(m.lng)) {
+    const e = await readMetaExifr(file);
+    if (valid(e.lat) && valid(e.lng)) m = e;
+    else if (!m.when && e.when) m.when = e.when;
+  }
+
   const hasGps =
-    Number.isFinite(lat) &&
-    Number.isFinite(lng) &&
-    !(lat === 0 && lng === 0);
+    Number.isFinite(m.lat) &&
+    Number.isFinite(m.lng) &&
+    !(m.lat === 0 && m.lng === 0);
 
-  const toDate = (v) => {
-    if (!v) return null;
-    const d = v instanceof Date ? v : new Date(v);
-    return Number.isNaN(d.getTime()) ? null : d;
-  };
-  let when =
-    toDate(exif?.DateTimeOriginal) ||
-    toDate(exif?.CreateDate) ||
-    toDate(exif?.ModifyDate);
-  if (!when) {
-    // Fall back to filesystem modified time so ordering still works.
-    when = new Date((await stat(file)).mtime);
-  }
+  // Fall back to filesystem modified time so ordering still works.
+  const when = m.when || new Date((await stat(file)).mtime);
 
-  return { hasGps, lat, lng, when };
+  return { hasGps, lat: m.lat, lng: m.lng, when };
 }
 
 /** Convert + resize one image to photos/<id>.jpg via sips. */

@@ -6,7 +6,7 @@ taken; a line connects them in chronological order to trace the route.
 
 - **Map:** [Leaflet](https://leafletjs.com/) + OpenStreetMap tiles (no API key, no billing)
 - **Site:** plain HTML/CSS/JS — no build step for the site itself
-- **Pipeline:** one Node script (`build.js`) that reads EXIF and makes web thumbnails
+- **Pipeline:** one Node script (`build.js`) that reads photo location metadata and makes web thumbnails
 
 ---
 
@@ -35,18 +35,29 @@ HEIC, JPEG, and PNG are all handled; videos/Live Photo `.mov` files are ignored.
 ## 2. Build
 
 ```bash
-npm install        # one-time: installs the exifr metadata reader
+npm install        # one-time (installs the exifr fallback reader)
 npm run build      # reads photos-source/, writes photos/ + data/photos.json
+```
+
+**Don't want to copy gigabytes into the project?** Point the build straight at any
+folder of photos — the originals stay where they are, only thumbnails are written:
+
+```bash
+node build.js "/path/to/your/exported photos"
 ```
 
 The build:
 
-- reads GPS + timestamp from each photo's EXIF (`exifr`),
-- converts/resizes each to a ~1600px web JPEG in `photos/` using macOS `sips`,
+- reads GPS + capture time from each photo using macOS Spotlight metadata
+  (`mdls`) — reliable on iPhone HEIC, where JS EXIF parsers often fail;
+  `exifr` is a fallback for anything `mdls` can't read,
+- converts/resizes each to a ≤1280px web JPEG in `photos/` using macOS `sips`,
+- ignores `.mov` videos (incl. Live Photo movies),
 - sorts everything chronologically and writes `data/photos.json`,
 - prints a summary, including any photos skipped for having **no location data**.
 
-Photos without GPS are listed in the summary and simply left off the map.
+Photos without GPS (screenshots, saved/downloaded images) are listed in the
+summary and simply left off the map.
 
 ## 3. Preview locally
 
