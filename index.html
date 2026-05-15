@@ -13,6 +13,23 @@
     <link rel="stylesheet" href="style.css" />
   </head>
   <body>
+    <!-- Cosmetic access gate (NOT real security: static site, public repo). -->
+    <div id="gate">
+      <form id="gate-form" autocomplete="off">
+        <h1>California Road Trip</h1>
+        <p>Enter the password to view the map.</p>
+        <input
+          id="gate-pw"
+          type="password"
+          placeholder="Password"
+          aria-label="Password"
+          autocomplete="off"
+        />
+        <button type="submit">View map</button>
+        <p id="gate-err" hidden>Incorrect password — try again.</p>
+      </form>
+    </div>
+
     <div id="map"></div>
 
     <div id="title-card">

@@ -268,6 +268,40 @@ async function init() {
   meta.textContent = `${photos.length} photos · ${startDay} – ${endDay}`;
 }
 
-init().catch((err) => {
-  showMessage("Something went wrong rendering the map: " + err.message);
-});
+function runApp() {
+  init().catch((err) => {
+    showMessage("Something went wrong rendering the map: " + err.message);
+  });
+}
+
+// Cosmetic access gate. NOTE: this is a static site served from a PUBLIC
+// repo — the password and all photos/coordinates are still directly
+// fetchable. This only keeps casual visitors off the landing page.
+(function gate() {
+  const PASSWORD = "holland";
+  const KEY = "catrip_unlocked";
+  const el = document.getElementById("gate");
+
+  if (localStorage.getItem(KEY) === "1") {
+    el.hidden = true;
+    runApp();
+    return;
+  }
+
+  const form = document.getElementById("gate-form");
+  const input = document.getElementById("gate-pw");
+  const err = document.getElementById("gate-err");
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    if (input.value === PASSWORD) {
+      localStorage.setItem(KEY, "1");
+      el.hidden = true;
+      runApp();
+    } else {
+      err.hidden = false;
+      input.value = "";
+      input.focus();
+    }
+  });
+  input.focus();
+})();
