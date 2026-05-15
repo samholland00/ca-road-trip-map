@@ -144,8 +144,97 @@ body {
   background: #dc2626;
 }
 
+/* Photo carousel / lightbox.
+   [hidden] rule MUST come first/win over the #carousel id selector below
+   (same UA-specificity gotcha that once made #message cover the map). */
+#carousel[hidden] {
+  display: none;
+}
+#carousel {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(12, 16, 22, 0.93);
+  user-select: none;
+}
+#cz-figure {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 92vw;
+  max-height: 88vh;
+}
+#cz-img {
+  max-width: 92vw;
+  max-height: 78vh;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #222;
+  box-shadow: 0 8px 36px rgba(0, 0, 0, 0.55);
+}
+#cz-cap {
+  margin-top: 12px;
+  color: #e8edf2;
+  font: 500 0.9rem/1.3 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  text-align: center;
+}
+.cz-btn {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.14);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+.cz-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+.cz-btn:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+#cz-close {
+  top: 16px;
+  right: 18px;
+  width: 40px;
+  height: 40px;
+  font-size: 1.05rem;
+}
+.cz-nav {
+  top: 50%;
+  transform: translateY(-50%);
+  width: 54px;
+  height: 76px;
+  border-radius: 12px;
+  font-size: 2.2rem;
+  line-height: 1;
+}
+#cz-prev {
+  left: 12px;
+}
+#cz-next {
+  right: 12px;
+}
+
 @media (max-width: 480px) {
   #title-card {
     max-width: calc(100vw - 32px);
+  }
+  .cz-nav {
+    width: 42px;
+    height: 60px;
+    font-size: 1.6rem;
+  }
+  #cz-img {
+    max-height: 72vh;
   }
 }

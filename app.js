@@ -39,17 +39,69 @@ function fmtDate(iso) {
   });
 }
 
-function popupHtml(photo, index, total) {
-  const caption = photo.caption
-    ? `<div class="caption">${photo.caption}</div>`
-    : "";
-  return `
-    <div class="photo-popup">
-      <img loading="lazy" src="${photo.file}" alt="Trip photo ${index + 1}" />
-      ${caption}
-      <div class="meta">Stop ${index + 1} of ${total}</div>
-      <div class="meta">${fmtDate(photo.timestamp)}</div>
-    </div>`;
+// Full-trip photo carousel. Opens at any photo and walks the whole trip in
+// chronological order — scales to clusters of any size (no spiderfy crowding).
+function createCarousel(photos) {
+  const el = document.getElementById("carousel");
+  const img = document.getElementById("cz-img");
+  const cap = document.getElementById("cz-cap");
+  const prevB = document.getElementById("cz-prev");
+  const nextB = document.getElementById("cz-next");
+  const closeB = document.getElementById("cz-close");
+  let idx = 0;
+
+  const preload = (i) => {
+    if (photos[i]) new Image().src = photos[i].file;
+  };
+  function render() {
+    const p = photos[idx];
+    img.src = p.file;
+    img.alt = p.caption || `Trip photo ${idx + 1}`;
+    cap.textContent =
+      (p.caption ? p.caption + " · " : "") +
+      `Stop ${idx + 1} of ${photos.length} · ${fmtDate(p.timestamp)}`;
+    prevB.disabled = idx === 0;
+    nextB.disabled = idx === photos.length - 1;
+    preload(idx + 1);
+    preload(idx - 1);
+  }
+  function open(i) {
+    idx = Math.min(Math.max(i | 0, 0), photos.length - 1);
+    render();
+    el.hidden = false;
+  }
+  function close() {
+    el.hidden = true;
+    img.removeAttribute("src");
+  }
+  function go(d) {
+    const n = idx + d;
+    if (n >= 0 && n < photos.length) {
+      idx = n;
+      render();
+    }
+  }
+
+  prevB.addEventListener("click", () => go(-1));
+  nextB.addEventListener("click", () => go(1));
+  closeB.addEventListener("click", close);
+  el.addEventListener("click", (e) => {
+    if (e.target === el) close(); // click backdrop to dismiss
+  });
+  let sx = null;
+  el.addEventListener(
+    "touchstart",
+    (e) => (sx = e.touches[0].clientX),
+    { passive: true }
+  );
+  el.addEventListener("touchend", (e) => {
+    if (sx == null) return;
+    const dx = e.changedTouches[0].clientX - sx;
+    if (Math.abs(dx) > 40) go(dx < 0 ? 1 : -1);
+    sx = null;
+  });
+
+  return { open, close, go, isOpen: () => !el.hidden };
 }
 
 function endpointMarker(lat, lng, kind, label) {
@@ -64,26 +116,23 @@ function endpointMarker(lat, lng, kind, label) {
   }).bindTooltip(label, { direction: "top" });
 }
 
-// Each pin is a small photo thumbnail (so you can see what's where without
-// opening it). Clicking enlarges it in a popup.
-function photoMarker(photo, index, total) {
+// Each pin is a photo thumbnail; clicking it opens the carousel at that photo.
+function photoMarker(photo, index, carousel) {
   const marker = L.marker([photo.lat, photo.lng], {
     icon: L.divIcon({
       className: "",
       html: `<div class="thumb-marker"><img loading="lazy" src="${photo.file}" alt=""></div>`,
       iconSize: [46, 46],
       iconAnchor: [23, 23],
-      popupAnchor: [0, -22],
     }),
   });
-  return marker.bindPopup(popupHtml(photo, index, total), {
-    maxWidth: 340,
-    minWidth: 240,
-  });
+  marker.photoIndex = index;
+  marker.on("click", () => carousel.open(index));
+  return marker;
 }
 
-// A one-click "back to the whole trip" control — no repeated zooming out.
-function addFullTripControl(map, cluster, routeBounds) {
+// One-click "back to the whole trip" control — no repeated zooming out.
+function addFullTripControl(map, routeBounds) {
   const Ctl = L.Control.extend({
     onAdd() {
       const b = L.DomUtil.create("button", "fulltrip-btn");
@@ -91,11 +140,9 @@ function addFullTripControl(map, cluster, routeBounds) {
       b.textContent = "⤢ Full trip";
       b.title = "Zoom back out to the whole route";
       L.DomEvent.disableClickPropagation(b);
-      L.DomEvent.on(b, "click", () => {
-        map.closePopup();
-        if (cluster.unspiderfy) cluster.unspiderfy();
-        map.flyToBounds(routeBounds.pad(0.12), { duration: 0.6 });
-      });
+      L.DomEvent.on(b, "click", () =>
+        map.flyToBounds(routeBounds.pad(0.12), { duration: 0.6 })
+      );
       return b;
     },
   });
@@ -137,6 +184,8 @@ async function init() {
     return;
   }
 
+  const carousel = createCarousel(photos);
+
   // Photos are already sorted chronologically by the build script.
   const latlngs = photos.map((p) => [p.lat, p.lng]);
   const routeBounds = L.latLngBounds(latlngs);
@@ -166,35 +215,45 @@ async function init() {
     ],
   }).addTo(map);
 
-  // Clustered photo markers. zoomToBoundsOnClick is OFF so clicking a cluster
-  // fans its photos out in place (spiderfy) instead of forcing a deep zoom.
+  // Clustered photo markers. Clicking a cluster (any size) opens the carousel
+  // at that stop — no zoom loop, no spiderfy crowding. Map zoom/pan still work
+  // for free exploration; "Full trip" jumps back to the overview.
   const cluster = L.markerClusterGroup({
     maxClusterRadius: 100, // screen pixels (default 80); higher = more grouping
     showCoverageOnHover: false,
     zoomToBoundsOnClick: false,
-    spiderfyOnMaxZoom: true,
-    spiderfyDistanceMultiplier: 2,
+    spiderfyOnMaxZoom: false,
   });
   photos.forEach((photo, i) => {
-    photoMarker(photo, i, photos.length).addTo(cluster);
+    photoMarker(photo, i, carousel).addTo(cluster);
+  });
+  cluster.on("clusterclick", (e) => {
+    const earliest = e.layer
+      .getAllChildMarkers()
+      .reduce((min, m) => Math.min(min, m.photoIndex), Infinity);
+    carousel.open(earliest);
   });
   map.addLayer(cluster);
 
-  // Always-visible start / end pins.
+  // Always-visible start / end pins (also open the carousel).
   const first = photos[0];
   const last = photos[photos.length - 1];
-  endpointMarker(first.lat, first.lng, "start", "Trip start").addTo(map);
-  endpointMarker(last.lat, last.lng, "end", "Trip end").addTo(map);
+  endpointMarker(first.lat, first.lng, "start", "Trip start")
+    .on("click", () => carousel.open(0))
+    .addTo(map);
+  endpointMarker(last.lat, last.lng, "end", "Trip end")
+    .on("click", () => carousel.open(photos.length - 1))
+    .addTo(map);
 
   map.fitBounds(routeBounds.pad(0.12));
-  addFullTripControl(map, cluster, routeBounds);
+  addFullTripControl(map, routeBounds);
 
-  // Esc collapses a fanned-out cluster / closes the open photo.
+  // Keyboard: arrows navigate the carousel, Esc closes it.
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") {
-      map.closePopup();
-      if (cluster.unspiderfy) cluster.unspiderfy();
-    }
+    if (!carousel.isOpen()) return;
+    if (e.key === "Escape") carousel.close();
+    else if (e.key === "ArrowLeft") carousel.go(-1);
+    else if (e.key === "ArrowRight") carousel.go(1);
   });
 
   const startDay = new Date(first.timestamp).toLocaleDateString(undefined, {
