@@ -35,6 +35,17 @@ const IMAGE_EXTS = new Set(['.heic', '.heif', '.jpg', '.jpeg', '.png', '.tif', '
 const MAX_EDGE_PX = 1280; // longest side of generated thumbnail (web-optimal)
 const JPEG_QUALITY = 70;
 
+// Source files to drop from the map (by filename, case-insensitive), even
+// though they have valid GPS. Keeps manual culls reproducible across rebuilds.
+const EXCLUDE = new Set(
+  [
+    'IMG_0793.HEIC', // burst dupes, Joshua Tree, Dec 26 — removed on request
+    'IMG_0794.HEIC',
+    'IMG_0795.HEIC',
+    'IMG_0796.HEIC',
+  ].map((n) => n.toLowerCase())
+);
+
 /** Recursively collect image file paths under dir. */
 async function collectImages(dir) {
   let entries;
@@ -175,16 +186,28 @@ async function main() {
 
   const located = [];
   const skippedNoGps = [];
+  const excluded = [];
   const errored = [];
 
   for (const file of images) {
     try {
+      const base = path.basename(file);
+      if (EXCLUDE.has(base.toLowerCase())) {
+        excluded.push(base);
+        continue;
+      }
       const meta = await readMeta(file);
       if (!meta.hasGps) {
         skippedNoGps.push(path.relative(SOURCE_DIR, file));
         continue;
       }
-      located.push({ file, lat: meta.lat, lng: meta.lng, when: meta.when });
+      located.push({
+        file,
+        src: base,
+        lat: meta.lat,
+        lng: meta.lng,
+        when: meta.when,
+      });
     } catch (err) {
       errored.push(`${path.relative(SOURCE_DIR, file)} — ${err.message}`);
     }
@@ -205,12 +228,13 @@ async function main() {
 
   const records = [];
   for (let i = 0; i < located.length; i++) {
-    const { file, lat, lng, when } = located[i];
+    const { file, src, lat, lng, when } = located[i];
     const id = String(i + 1).padStart(4, '0');
     try {
       const thumb = await makeThumbnail(file, id);
       records.push({
         id,
+        src,
         file: `photos/${thumb}`,
         lat: Number(lat.toFixed(6)),
         lng: Number(lng.toFixed(6)),
@@ -232,7 +256,11 @@ async function main() {
   console.log('\n──────── Build summary ────────');
   console.log(`Mapped photos:        ${records.length}`);
   console.log(`Skipped (no GPS):     ${skippedNoGps.length}`);
+  console.log(`Excluded (cull list): ${excluded.length}`);
   console.log(`Errors:               ${errored.length}`);
+  if (excluded.length) {
+    console.log(`\nExcluded by cull list: ${excluded.sort().join(', ')}`);
+  }
   if (records.length) {
     console.log(
       `Trip span:            ${records[0].timestamp.slice(0, 10)} → ` +
