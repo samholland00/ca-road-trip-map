@@ -48,12 +48,6 @@ const EXCLUDE = new Set(
     'IMG_0796.HEIC',
     'IMG_0797.HEIC', // Joshua Tree, Dec 26 — removed on request (old stop 103)
     'IMG_0851.HEIC', // Dec 28 — removed on request (old stop 155)
-    'IMG_0934.HEIC', // Dec 30 — removed on request (stops 234-235)
-    'IMG_0935.HEIC',
-    'IMG_0988.HEIC', // Dec 31 — removed on request (stop 261)
-    'IMG_0999.HEIC', // Jan 1 — removed on request (stop 269)
-    'IMG_1005.HEIC', // Jan 2 — removed on request (stop 273)
-    'IMG_1007.HEIC', // Jan 2 — removed on request (stop 275)
   ].map((n) => n.toLowerCase())
 );
 
