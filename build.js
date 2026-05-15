@@ -14,7 +14,14 @@
 
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { readdir, stat, writeFile, unlink, mkdir } from 'node:fs/promises';
+import {
+  readdir,
+  stat,
+  readFile,
+  writeFile,
+  unlink,
+  mkdir,
+} from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import exifr from 'exifr';
@@ -30,6 +37,7 @@ const SOURCE_DIR = process.argv[2]
   : path.join(ROOT, 'photos-source');
 const PHOTOS_DIR = path.join(ROOT, 'photos');
 const DATA_FILE = path.join(ROOT, 'data', 'photos.json');
+const GEOCACHE_FILE = path.join(ROOT, 'data', 'geocache.json');
 
 const IMAGE_EXTS = new Set(['.heic', '.heif', '.jpg', '.jpeg', '.png', '.tif', '.tiff']);
 const MAX_EDGE_PX = 1280; // longest side of generated thumbnail (web-optimal)
@@ -161,9 +169,22 @@ async function readMeta(file) {
   return { hasGps, lat: m.lat, lng: m.lng, when };
 }
 
-/** Convert + resize one image to photos/<id>.jpg via sips. */
-async function makeThumbnail(srcFile, id) {
-  const outFile = path.join(PHOTOS_DIR, `${id}.jpg`);
+/** Stable thumbnail filename derived from the source (NOT the sequence
+ *  number) so culls/reorders don't force every thumbnail to regenerate. */
+function thumbName(src) {
+  return src.replace(/\.[^.]+$/, '').replace(/[^A-Za-z0-9_-]/g, '_') + '.jpg';
+}
+
+/** Convert + resize via sips, but only if the thumbnail is missing or older
+ *  than the source. Returns 'built' or 'reused'. */
+async function ensureThumbnail(srcFile, name) {
+  const outFile = path.join(PHOTOS_DIR, name);
+  try {
+    const [s, t] = await Promise.all([stat(srcFile), stat(outFile)]);
+    if (t.mtimeMs >= s.mtimeMs) return 'reused';
+  } catch {
+    /* thumbnail missing — fall through and build it */
+  }
   await execFileP('sips', [
     '-s', 'format', 'jpeg',
     '-s', 'formatOptions', String(JPEG_QUALITY),
@@ -171,7 +192,61 @@ async function makeThumbnail(srcFile, id) {
     srcFile,
     '--out', outFile,
   ]);
-  return path.basename(outFile);
+  return 'built';
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const STATE_ABBR = {
+  California: 'CA', Nevada: 'NV', Arizona: 'AZ', Oregon: 'OR', Utah: 'UT',
+};
+
+// Iconic areas this route passed through that reverse-geocoding labels only
+// as a bare county. Checked first (first match wins); boxes are
+// [latMin, latMax, lngMin, lngMax], kept reasonably tight to avoid bleed.
+const REGION_OVERRIDES = [
+  ['Yosemite National Park', 37.5, 38.2, -120.0, -119.2],
+  ['Sequoia & Kings Canyon', 36.35, 37.1, -118.95, -118.3],
+  ['Death Valley National Park', 35.85, 37.05, -117.6, -116.35],
+  ['Mojave National Preserve', 34.7, 35.5, -115.95, -115.3],
+  ['Joshua Tree National Park', 33.6, 34.2, -116.4, -115.65],
+  ['Big Sur', 35.85, 36.45, -121.97, -121.3],
+];
+function regionOverride(lat, lng) {
+  for (const [name, a, b, c, d] of REGION_OVERRIDES) {
+    if (lat >= a && lat <= b && lng >= c && lng <= d) return name;
+  }
+  return '';
+}
+
+/** Persistent reverse-geocode cache keyed by coarse (~100 m) coordinates so
+ *  nearby photos share one lookup and reruns never refetch. */
+async function loadGeocache() {
+  try {
+    return JSON.parse(await readFile(GEOCACHE_FILE, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+const geoKey = (lat, lng) => `${lat.toFixed(3)},${lng.toFixed(3)}`;
+
+/** One polite Nominatim reverse lookup -> short place label, or ''. */
+async function reverseGeocode(lat, lng) {
+  const url =
+    `https://nominatim.openstreetmap.org/reverse?format=jsonv2` +
+    `&lat=${lat}&lon=${lng}&zoom=14&addressdetails=1`;
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'ca-road-trip-map/1.0 (personal trip map)' },
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const d = await res.json();
+  const a = d.address || {};
+  const name =
+    a.tourism || a.leisure || a.attraction || a.national_park ||
+    a.protected_area || a.park || a.village || a.town || a.city ||
+    a.hamlet || a.suburb || a.county || (d.name || '').split(',')[0];
+  if (!name) return '';
+  const st = STATE_ABBR[a.state] || '';
+  return st ? `${name}, ${st}` : name;
 }
 
 async function main() {
@@ -223,34 +298,67 @@ async function main() {
     (a, b) => a.when - b.when || a.file.localeCompare(b.file)
   );
 
-  // Clear previously generated thumbnails so reruns are deterministic.
-  // Only removes our own numbered output (e.g. 0007.jpg) — leaves .gitkeep
-  // and anything else in the folder untouched.
   await mkdir(PHOTOS_DIR, { recursive: true });
-  for (const name of await readdir(PHOTOS_DIR)) {
-    if (/^\d+\.jpg$/.test(name)) await unlink(path.join(PHOTOS_DIR, name));
-  }
+  const geocache = await loadGeocache();
+  let built = 0;
+  let reused = 0;
+  let geocoded = 0;
+  let geoFailed = 0;
 
   const records = [];
   for (let i = 0; i < located.length; i++) {
     const { file, src, lat, lng, when } = located[i];
     const id = String(i + 1).padStart(4, '0');
     try {
-      const thumb = await makeThumbnail(file, id);
+      const name = thumbName(src);
+      if ((await ensureThumbnail(file, name)) === 'built') built++;
+      else reused++;
+
+      // Curated iconic-area name wins; otherwise reverse-geocode (cached;
+      // one polite Nominatim call per ~100 m cell).
+      let place = regionOverride(lat, lng);
+      if (!place) {
+        const key = geoKey(lat, lng);
+        place = geocache[key];
+        if (place === undefined) {
+          try {
+            await sleep(1100); // Nominatim: max ~1 req/sec
+            place = await reverseGeocode(lat, lng);
+            geocoded++;
+          } catch {
+            place = '';
+            geoFailed++;
+          }
+          geocache[key] = place;
+        }
+      }
+
       records.push({
         id,
         src,
-        file: `photos/${thumb}`,
+        file: `photos/${name}`,
         lat: Number(lat.toFixed(6)),
         lng: Number(lng.toFixed(6)),
         timestamp: when.toISOString(),
+        place: place || '',
         caption: '',
       });
-      process.stdout.write(`\r  thumbnailed ${i + 1}/${located.length}`);
+      process.stdout.write(
+        `\r  processed ${i + 1}/${located.length} (built ${built}, reused ${reused})`
+      );
     } catch (err) {
       errored.push(
-        `${path.relative(SOURCE_DIR, file)} — sips failed: ${err.message}`
+        `${path.relative(SOURCE_DIR, file)} — ${err.message}`
       );
+    }
+  }
+
+  // Persist the geocode cache and prune orphan thumbnails (culled/renamed).
+  await writeFile(GEOCACHE_FILE, JSON.stringify(geocache, null, 2) + '\n');
+  const keep = new Set(records.map((r) => path.basename(r.file)));
+  for (const f of await readdir(PHOTOS_DIR)) {
+    if (f.endsWith('.jpg') && !keep.has(f)) {
+      await unlink(path.join(PHOTOS_DIR, f));
     }
   }
   process.stdout.write('\n');
@@ -260,6 +368,8 @@ async function main() {
   // ---- Summary ----
   console.log('\n──────── Build summary ────────');
   console.log(`Mapped photos:        ${records.length}`);
+  console.log(`Thumbnails:           ${built} built, ${reused} reused`);
+  console.log(`Geocoded:             ${geocoded} new, ${geoFailed} failed`);
   console.log(`Skipped (no GPS):     ${skippedNoGps.length}`);
   console.log(`Excluded (cull list): ${excluded.length}`);
   console.log(`Errors:               ${errored.length}`);

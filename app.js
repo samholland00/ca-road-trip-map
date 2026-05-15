@@ -39,6 +39,105 @@ function fmtDate(iso) {
   });
 }
 
+// California is UTC-8 (no DST late Dec/early Jan) — group by that local date
+// so a 9pm photo counts as that evening, not the next UTC day.
+function pacificDay(iso) {
+  return new Date(new Date(iso).getTime() - 8 * 3600000)
+    .toISOString()
+    .slice(0, 10);
+}
+function shortDay(ymd) {
+  const [y, m, d] = ymd.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+  });
+}
+const DAY_COLORS = [
+  "#e6194B", "#3cb44b", "#4363d8", "#f58231", "#911eb4", "#008080",
+  "#f032e6", "#9A6324", "#808000", "#000075", "#e67e22", "#1abc9c",
+  "#c0392b", "#2c3e50",
+];
+
+function haversineMi(a, b) {
+  const R = 3958.8;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const s =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+function computeStats(photos) {
+  let path = 0;
+  let longest = { mi: 0 };
+  const perDayMi = {};
+  for (let i = 1; i < photos.length; i++) {
+    const mi = haversineMi(photos[i - 1], photos[i]);
+    path += mi;
+    if (mi > longest.mi) longest = { mi, to: photos[i] };
+    const d = pacificDay(photos[i].timestamp);
+    perDayMi[d] = (perDayMi[d] || 0) + mi;
+  }
+  const days = [...new Set(photos.map((p) => pacificDay(p.timestamp)))].sort();
+  const big = Object.entries(perDayMi).sort((a, b) => b[1] - a[1])[0] || [
+    "",
+    0,
+  ];
+  return {
+    photos: photos.length,
+    days: days.length,
+    roadMi: Math.round((path * 1.25) / 10) * 10,
+    longestMi: Math.round(longest.mi),
+    longestTo: longest.to,
+    bigDay: big[0],
+    bigDayMi: Math.round(big[1]),
+    span: `${shortDay(days[0])} – ${shortDay(days[days.length - 1])}`,
+  };
+}
+
+// Collapsible panel: trip stats + the day→color legend for the route.
+function addStatsPanel(map, stats, days, dayColor, photosByDay) {
+  const Ctl = L.Control.extend({
+    onAdd() {
+      const wrap = L.DomUtil.create("div", "stats-wrap");
+      const btn = L.DomUtil.create("button", "stats-toggle", wrap);
+      btn.type = "button";
+      btn.textContent = "📊 Trip stats";
+      const panel = L.DomUtil.create("div", "stats-panel", wrap);
+      panel.hidden = true;
+
+      const legend = days
+        .map(
+          (d) =>
+            `<div class="lg-row"><span class="lg-sw" style="background:${dayColor[d]}"></span>` +
+            `${shortDay(d)} <span class="lg-n">${photosByDay[d]} photos</span></div>`
+        )
+        .join("");
+      panel.innerHTML =
+        `<div class="st-grid">` +
+        `<b>${stats.photos}</b><span>photos</span>` +
+        `<b>${stats.days}</b><span>days (${stats.span})</span>` +
+        `<b>~${stats.roadMi.toLocaleString()}</b><span>est. road miles</span>` +
+        `<b>~${stats.longestMi}</b><span>mi longest leg → ${
+          stats.longestTo.place || "?"
+        }</span>` +
+        `<b>~${stats.bigDayMi}</b><span>mi biggest day (${shortDay(
+          stats.bigDay
+        )})</span>` +
+        `</div><div class="lg-title">Route by day</div>${legend}`;
+
+      btn.addEventListener("click", () => (panel.hidden = !panel.hidden));
+      L.DomEvent.disableClickPropagation(wrap);
+      L.DomEvent.disableScrollPropagation(panel);
+      return wrap;
+    },
+  });
+  map.addControl(new Ctl({ position: "bottomleft" }));
+}
+
 // Full-trip photo carousel. Opens at any photo and walks the whole trip in
 // chronological order — scales to clusters of any size (no spiderfy crowding).
 function createCarousel(photos) {
@@ -57,9 +156,14 @@ function createCarousel(photos) {
     const p = photos[idx];
     img.src = p.file;
     img.alt = p.caption || `Trip photo ${idx + 1}`;
-    cap.textContent =
-      (p.caption ? p.caption + " · " : "") +
-      `Stop ${idx + 1} of ${photos.length} · ${fmtDate(p.timestamp)}`;
+    cap.textContent = [
+      p.caption,
+      p.place,
+      `Stop ${idx + 1} of ${photos.length}`,
+      fmtDate(p.timestamp),
+    ]
+      .filter(Boolean)
+      .join("  ·  ");
     prevB.disabled = idx === 0;
     nextB.disabled = idx === photos.length - 1;
     preload(idx + 1);
@@ -189,31 +293,51 @@ async function init() {
   // Photos are already sorted chronologically by the build script.
   const latlngs = photos.map((p) => [p.lat, p.lng]);
   const routeBounds = L.latLngBounds(latlngs);
-  const routeColor = getComputedStyle(document.documentElement)
-    .getPropertyValue("--route")
-    .trim();
 
-  // Route line through every stop in order.
-  const route = L.polyline(latlngs, {
-    color: routeColor,
-    weight: 4,
-    opacity: 0.8,
-  }).addTo(map);
-
-  // Arrowheads along the route showing direction of travel.
-  L.polylineDecorator(route, {
-    patterns: [
-      {
-        offset: 30,
-        repeat: 90,
-        symbol: L.Symbol.arrowHead({
-          pixelSize: 11,
-          polygon: false,
-          pathOptions: { stroke: true, color: routeColor, weight: 3, opacity: 0.9 },
-        }),
-      },
-    ],
-  }).addTo(map);
+  // Group the route by day; each day gets its own color + arrowheads, with
+  // the previous day's last point carried over so the line stays continuous.
+  const days = [];
+  const dayColor = {};
+  const dayCoords = {};
+  const photosByDay = {};
+  photos.forEach((p) => {
+    const d = pacificDay(p.timestamp);
+    if (!(d in dayColor)) {
+      dayColor[d] = DAY_COLORS[days.length % DAY_COLORS.length];
+      days.push(d);
+      dayCoords[d] = [];
+    }
+    dayCoords[d].push([p.lat, p.lng]);
+    photosByDay[d] = (photosByDay[d] || 0) + 1;
+  });
+  let prevLast = null;
+  for (const d of days) {
+    const coords = prevLast ? [prevLast, ...dayCoords[d]] : dayCoords[d];
+    const seg = L.polyline(coords, {
+      color: dayColor[d],
+      weight: 4,
+      opacity: 0.85,
+    }).addTo(map);
+    L.polylineDecorator(seg, {
+      patterns: [
+        {
+          offset: 25,
+          repeat: 100,
+          symbol: L.Symbol.arrowHead({
+            pixelSize: 10,
+            polygon: false,
+            pathOptions: {
+              stroke: true,
+              color: dayColor[d],
+              weight: 3,
+              opacity: 0.9,
+            },
+          }),
+        },
+      ],
+    }).addTo(map);
+    prevLast = dayCoords[d][dayCoords[d].length - 1];
+  }
 
   // Clustered photo markers. Clicking a cluster (any size) opens the carousel
   // at that stop — no zoom loop, no spiderfy crowding. Map zoom/pan still work
@@ -247,6 +371,7 @@ async function init() {
 
   map.fitBounds(routeBounds.pad(0.12));
   addFullTripControl(map, routeBounds);
+  addStatsPanel(map, computeStats(photos), days, dayColor, photosByDay);
 
   // Keyboard: arrows navigate the carousel, Esc closes it.
   document.addEventListener("keydown", (e) => {
