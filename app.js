@@ -1,19 +1,30 @@
 /* California road trip map — reads data/photos.json and renders the route. */
 
-const CDN = "https://unpkg.com/leaflet@1.9.4/dist/images/";
-
-// Explicit default-marker image URLs so pins work on GitHub Pages subpaths.
-L.Icon.Default.mergeOptions({
-  iconRetinaUrl: CDN + "marker-icon-2x.png",
-  iconUrl: CDN + "marker-icon.png",
-  shadowUrl: CDN + "marker-shadow.png",
-});
-
 function showMessage(text) {
   const el = document.getElementById("message");
   el.textContent = text;
   el.hidden = false;
 }
+
+// Any uncaught error becomes a visible on-screen message instead of a blank page.
+window.addEventListener("error", (e) => {
+  showMessage("Something went wrong loading the map: " + e.message);
+});
+
+if (typeof L === "undefined") {
+  showMessage(
+    "The map library (vendor/leaflet/leaflet.js) didn't load. Make sure you're " +
+      "viewing this through a local server (npm run serve), not opening the file directly."
+  );
+  throw new Error("Leaflet not loaded");
+}
+
+// Local (vendored) default-marker images — works offline and on Pages subpaths.
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: "vendor/leaflet/images/marker-icon-2x.png",
+  iconUrl: "vendor/leaflet/images/marker-icon.png",
+  shadowUrl: "vendor/leaflet/images/marker-shadow.png",
+});
 
 function fmtDate(iso) {
   return new Date(iso).toLocaleString(undefined, {
@@ -133,4 +144,6 @@ async function init() {
   meta.textContent = `${photos.length} photos · ${startDay} – ${endDay}`;
 }
 
-init();
+init().catch((err) => {
+  showMessage("Something went wrong rendering the map: " + err.message);
+});
