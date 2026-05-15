@@ -1,0 +1,14 @@
+{
+  "name": "ca-road-trip-map",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A visual map of a two-week California road trip, built from photo GPS metadata.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.js",
+    "serve": "python3 -m http.server 8000"
+  },
+  "dependencies": {
+    "exifr": "^7.1.3"
+  }
+}

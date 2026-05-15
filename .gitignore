@@ -1,0 +1,9 @@
+# Source photos (originals) — never committed; can be large/private
+photos-source/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# OS
+.DS_Store
